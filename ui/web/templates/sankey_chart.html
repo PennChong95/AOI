@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; }
+html, body, #chart { width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="chart"></div>
+<script src="../echarts/echarts.min.js"></script>
+<script>
+var chart = echarts.init(document.getElementById('chart'), 'light');
+var P = { primary: '#4F6CF7', danger: '#EF4444', success: '#10B981', warning: '#F59E0B' };
+
+function renderSankeyChart(data) {
+    var d = JSON.parse(data);
+    option = {
+        tooltip: { trigger: 'item', backgroundColor: '#fff', borderColor: '#E2E8F0', textStyle: { color: '#1E293B' } },
+        series: [{
+            type: 'sankey',
+            layout: 'none',
+            layoutIterations: 32,
+            emphasis: { focus: 'adjacency' },
+            data: d.nodes || [],
+            links: d.links || [],
+            lineStyle: { color: 'gradient', curveness: 0.5 },
+            label: { color: '#1E293B', fontSize: 11 },
+            itemStyle: { borderWidth: 1, borderColor: '#E2E8F0' }
+        }]
+    };
+    chart.setOption(option, true);
+}
+
+function renderChart(data) { renderSankeyChart(data); }
+window.addEventListener('resize', function() { chart.resize(); });
+</script>
+</body>
+</html>

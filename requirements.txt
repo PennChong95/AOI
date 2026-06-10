@@ -1,0 +1,7 @@
+PyQt5>=5.15.0
+PyQtWebEngine>=5.15.0
+pyqtgraph>=0.13.0
+pymysql>=1.0.0
+opencv-python>=4.5.0
+numpy>=1.21.0
+openpyxl>=3.0.0

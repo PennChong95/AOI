@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.spec
+*.egg
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 打包产物
+dist_pyinstaller/
+dist_nuitka/
+installer_output/
+*.exe
+*.msi
+
+# 项目特有
+Fingerprint Login/
+cache/thumbnails/
+
+# 系统
+Thumbs.db
+.DS_Store

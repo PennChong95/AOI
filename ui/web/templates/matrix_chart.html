@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; }
+html, body, #chart { width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="chart"></div>
+<script src="../echarts/echarts.min.js"></script>
+<script>
+var chart = echarts.init(document.getElementById('chart'), 'light');
+
+function renderMatrixChart(data) {
+    var d = JSON.parse(data);
+    var seriesData = [];
+    var maxVal = 1;
+    for (var r = 0; r < d.data.length; r++) {
+        for (var c = 0; c < d.data[r].length; c++) {
+            var v = d.data[r][c];
+            if (v > maxVal) maxVal = v;
+            seriesData.push([c, r, v]);
+        }
+    }
+    option = {
+        tooltip: {
+            backgroundColor: '#fff',
+            borderColor: '#E2E8F0',
+            textStyle: { color: '#1E293B' },
+            formatter: function(p) {
+                return d.yLabels[p.data[1]] + ' × ' + d.xLabels[p.data[0]] + '<br/>数量: ' + p.data[2];
+            }
+        },
+        grid: { left: 120, right: 40, top: 10, bottom: 40 },
+        xAxis: {
+            type: 'category',
+            data: d.xLabels,
+            position: 'top',
+            axisLabel: { color: '#64748B', fontSize: 10, rotate: 30 },
+            axisTick: { show: false },
+            splitArea: { show: true }
+        },
+        yAxis: {
+            type: 'category',
+            data: d.yLabels,
+            axisLabel: { color: '#64748B', fontSize: 10 },
+            axisTick: { show: false },
+            splitArea: { show: true }
+        },
+        visualMap: {
+            min: 0,
+            max: maxVal,
+            calculable: false,
+            orient: 'horizontal',
+            left: 'center',
+            bottom: 0,
+            inRange: { color: ['#F0FDF4', '#10B981', '#064E3B'] },
+            textStyle: { color: '#64748B', fontSize: 10 }
+        },
+        series: [{
+            name: '缺陷矩阵',
+            type: 'heatmap',
+            data: seriesData,
+            label: {
+                show: true,
+                color: '#1E293B',
+                fontSize: 10,
+                formatter: function(p) { return p.data[2] > 0 ? p.data[2] : ''; }
+            },
+            emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' } }
+        }]
+    };
+    chart.setOption(option, true);
+}
+
+function renderChart(data) { renderMatrixChart(data); }
+window.addEventListener('resize', function() { chart.resize(); });
+</script>
+</body>
+</html>

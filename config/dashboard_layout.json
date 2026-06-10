@@ -1,0 +1,27 @@
+{
+  "version": "2.0",
+  "slots": [
+    {
+      "slot_id": 0,
+      "card_id": "heatmap",
+      "is_activated": false
+    },
+    {
+      "slot_id": 1,
+      "card_id": "defect",
+      "is_activated": false
+    },
+    {
+      "slot_id": 2,
+      "card_id": "trend",
+      "is_activated": true
+    },
+    {
+      "slot_id": 3,
+      "card_id": "image_viewer",
+      "is_activated": false
+    }
+  ],
+  "activated_slot_id": 2,
+  "preset": "2x2"
+}

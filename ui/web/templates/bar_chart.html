@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #chart { width: 100%; height: 100%; }
+body { 
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: transparent;
+}
+</style>
+</head>
+<body>
+<div id="chart"></div>
+<script src="../echarts/echarts.min.js"></script>
+<script>
+var chart = echarts.init(document.getElementById('chart'), 'light');
+
+var COLORS = ['#3B82F6', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#EC4899', '#06B6D4', '#F97316', '#84CC16', '#64748B'];
+
+function renderBarChart(data) {
+    var d = JSON.parse(data);
+    var colors = d.colors || COLORS;
+    
+    if (d.orient === 'horizontal') {
+        var seriesData = d.values.map(function(v, i) {
+            var color = colors[i % colors.length];
+            return {
+                value: v,
+                itemStyle: {
+                    color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                        { offset: 0, color: color + '80' },
+                        { offset: 1, color: color }
+                    ]),
+                    borderRadius: [0, 4, 4, 0]
+                }
+            };
+        });
+        
+        option = {
+            color: COLORS,
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                backgroundColor: '#FFFFFF',
+                borderColor: '#E2E8F0',
+                borderWidth: 1,
+                textStyle: {
+                    color: '#1E293B',
+                    fontSize: 12
+                }
+            },
+            grid: {
+                left: 100,
+                right: 60,
+                top: 20,
+                bottom: 20
+            },
+            xAxis: {
+                type: 'value',
+                splitLine: { 
+                    lineStyle: { 
+                        color: '#F1F5F9',
+                        type: 'dashed'
+                    } 
+                },
+                axisLabel: { 
+                    color: '#94A3B8', 
+                    fontSize: 10
+                },
+                axisLine: { show: false },
+                axisTick: { show: false }
+            },
+            yAxis: {
+                type: 'category',
+                data: d.labels,
+                inverse: true,
+                axisLine: { 
+                    lineStyle: { 
+                        color: '#E2E8F0'
+                    } 
+                },
+                axisLabel: { 
+                    color: '#475569', 
+                    fontSize: 10
+                },
+                axisTick: { show: false }
+            },
+            series: [{
+                name: d.seriesName || '',
+                type: 'bar',
+                data: seriesData,
+                barWidth: 16,
+                label: { 
+                    show: true, 
+                    position: 'right', 
+                    color: '#475569', 
+                    fontSize: 10
+                },
+                animationDuration: 1000,
+                animationEasing: 'cubicOut'
+            }]
+        };
+    } else {
+        var seriesData = d.values.map(function(v, i) {
+            var color = colors[i % colors.length];
+            return {
+                value: v,
+                itemStyle: {
+                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                        { offset: 0, color: color },
+                        { offset: 1, color: color + '80' }
+                    ]),
+                    borderRadius: [4, 4, 0, 0]
+                }
+            };
+        });
+        
+        option = {
+            color: COLORS,
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                backgroundColor: '#FFFFFF',
+                borderColor: '#E2E8F0',
+                borderWidth: 1,
+                textStyle: {
+                    color: '#1E293B',
+                    fontSize: 12
+                }
+            },
+            grid: {
+                left: 50,
+                right: 20,
+                top: 30,
+                bottom: 60
+            },
+            xAxis: {
+                type: 'category',
+                data: d.labels,
+                axisLabel: { 
+                    color: '#94A3B8', 
+                    fontSize: 10,
+                    rotate: d.labels && d.labels.length > 6 ? 30 : 0
+                },
+                axisTick: { show: false },
+                axisLine: { 
+                    lineStyle: { 
+                        color: '#E2E8F0'
+                    } 
+                }
+            },
+            yAxis: {
+                type: 'value',
+                splitLine: { 
+                    lineStyle: { 
+                        color: '#F1F5F9',
+                        type: 'dashed'
+                    } 
+                },
+                axisLabel: { 
+                    color: '#94A3B8', 
+                    fontSize: 10
+                },
+                axisLine: { show: false },
+                axisTick: { show: false }
+            },
+            series: [{
+                name: d.seriesName || '',
+                type: 'bar',
+                data: seriesData,
+                barWidth: 24,
+                label: { 
+                    show: true, 
+                    position: 'top', 
+                    color: '#475569', 
+                    fontSize: 10
+                },
+                animationDuration: 1000,
+                animationEasing: 'cubicOut'
+            }]
+        };
+    }
+    
+    chart.setOption(option, true);
+}
+
+function renderChart(data) { renderBarChart(data); }
+
+window.addEventListener('resize', function() { 
+    chart.resize(); 
+});
+</script>
+</body>
+</html>
