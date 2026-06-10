@@ -16,12 +16,13 @@ except ImportError:
 from utils.icon_data import get_icon
 from utils.ui_utils import init_scale_factor, sf, sp
 from database.manager import DBManager
-from utils.config_manager import ConfigManager
+from utils.config_manager import ConfigManager, LogManager
 from auth.login_window import LoginWindow
 from review.main_window import MainWindow
 
 
 def main():
+    LogManager.setup_logging()
     pg.setConfigOptions(imageAxisOrder='row-major')
 
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -49,8 +50,8 @@ def main():
         ok, errors = db_manager.connect_all()
         db_ok = ok
         err_msgs = errors
-    except Exception:
-        pass
+    except Exception as exc:
+        LogManager.log_exception("数据库连接初始化异常", exc)
 
     if not db_ok:
         detail = "\n".join(err_msgs) if err_msgs else str(err_msgs)
@@ -69,7 +70,8 @@ def main():
                 db_manager = DBManager(db_configs)
                 db_manager.connect_all()
                 db_ok = True
-            except Exception:
+            except Exception as exc:
+                LogManager.log_exception("设置后数据库重连失败", exc)
                 QMessageBox.critical(None, "错误", "仍然无法连接数据库，程序将退出。")
                 sys.exit(1)
         else:

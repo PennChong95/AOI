@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #chart { width: 100%; height: 100%; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif;
+    background: transparent;
+    overflow: hidden;
+}
+</style>
+</head>
+<body>
+<div id="chart"></div>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script src="../echarts/echarts.min.js"></script>
+<script>
+var chart = echarts.init(document.getElementById('chart'), 'light');
+var chartBridge = null;
+var COLORS = ['#3B82F6', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#EC4899', '#06B6D4', '#F97316', '#84CC16', '#64748B'];
+
+if (typeof QWebChannel !== 'undefined' && typeof qt !== 'undefined') {
+    new QWebChannel(qt.webChannelTransport, function(channel) {
+        chartBridge = channel.objects.chartBridge;
+    });
+}
+
+chart.on('click', function(params) {
+    if (chartBridge && params && params.name) {
+        chartBridge.emitDrilldown(params.name);
+    }
+});
+
+function renderPieChart(data) {
+    var d = JSON.parse(data);
+    var labels = d.labels || [];
+    var values = d.values || [];
+    var colors = d.colors || COLORS;
+    var total = values.reduce(function(a, b) { return a + b; }, 0);
+    var seriesData = labels.map(function(label, i) {
+        return {
+            name: label,
+            value: values[i] || 0,
+            itemStyle: { color: colors[i % colors.length] }
+        };
+    });
+
+    var option = {
+        color: colors,
+        tooltip: {
+            trigger: 'item',
+            backgroundColor: '#FFFFFF',
+            borderColor: '#E2E8F0',
+            borderWidth: 1,
+            textStyle: { color: '#1E293B', fontSize: 12 },
+            formatter: '{b}<br/>{c} ({d}%)'
+        },
+        legend: {
+            type: 'scroll',
+            orient: 'vertical',
+            right: 4,
+            top: 'middle',
+            width: '38%',
+            itemWidth: 10,
+            itemHeight: 8,
+            textStyle: { color: '#475569', fontSize: 11 },
+            formatter: function(name) {
+                var idx = labels.indexOf(name);
+                if (idx < 0 || !total) return name;
+                return name + '  ' + (values[idx] / total * 100).toFixed(1) + '%';
+            }
+        },
+        series: [{
+            name: '缺陷分布',
+            type: 'pie',
+            radius: ['48%', '72%'],
+            center: ['32%', '50%'],
+            avoidLabelOverlap: true,
+            minAngle: 3,
+            data: seriesData,
+            label: {
+                show: !!d.showPercent,
+                formatter: '{d}%',
+                color: '#FFFFFF',
+                fontSize: 11,
+                fontWeight: 700
+            },
+            labelLine: { show: false },
+            itemStyle: {
+                borderColor: '#FFFFFF',
+                borderWidth: 2
+            },
+            emphasis: {
+                scale: true,
+                scaleSize: 6,
+                itemStyle: {
+                    shadowBlur: 12,
+                    shadowColor: 'rgba(15, 23, 42, 0.18)'
+                }
+            },
+            animationDuration: 800,
+            animationEasing: 'cubicOut'
+        }],
+        graphic: [{
+            type: 'text',
+            left: '32%',
+            top: '49%',
+            style: {
+                text: total + '\n总计',
+                textAlign: 'center',
+                fill: '#475569',
+                fontSize: 13,
+                fontWeight: 700,
+                lineHeight: 18
+            }
+        }]
+    };
+
+    chart.setOption(option, true);
+}
+
+function renderChart(data) { renderPieChart(data); }
+
+window.addEventListener('resize', function() {
+    chart.resize();
+});
+</script>
+</body>
+</html>

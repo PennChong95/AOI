@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QMessageBox, QApplication, QWidget, QStackedWidget, QFrame,
+    QInputDialog,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QRectF
 from PyQt5.QtGui import QFont, QPainter, QPen, QColor
@@ -371,8 +372,7 @@ class LoginWindow(QDialog):
                 return
 
             if self._login_mode == LOGIN_MODE_PASSWORD:
-                stored_pwd = user.get("password", "")
-                if not stored_pwd:
+                if not UserManager.password_is_set(user):
                     LogManager.log_login(username, "password", False)
                     QMessageBox.warning(
                         self, "登录失败",
@@ -380,7 +380,7 @@ class LoginWindow(QDialog):
                     )
                     return
 
-                if user.get("password") != password:
+                if not UserManager.verify_password(user, password):
                     LogManager.log_login(username, "password", False)
                     QMessageBox.warning(self, "登录失败", "用户名或密码错误")
                     return
@@ -388,18 +388,49 @@ class LoginWindow(QDialog):
                 if not can_login_with_password(user.get("role", "")):
                     QMessageBox.warning(self, "登录失败", "该账户不允许使用密码登录")
                     return
-                if user.get("password") != password:
+                if not UserManager.verify_password(user, password):
                     LogManager.log_login(username, "password", False)
                     QMessageBox.warning(self, "登录失败", "用户名或密码错误")
                     return
 
             self.current_user = user
             role = user.get("role", ROLE_ADMIN)
+            if user.get("must_change_password", False):
+                if not self._force_password_change(username):
+                    return
             LogManager.log_login(username, "password", True)
             self.login_success.emit(self.db_manager, username, role)
             self.accept()
         except Exception as e:
+            LogManager.log_exception("密码登录异常", e, f"username={username}")
             QMessageBox.critical(self, "错误", f"登录失败: {e}")
+
+    def _force_password_change(self, username: str) -> bool:
+        new_pwd, ok = QInputDialog.getText(
+            self,
+            "修改默认密码",
+            "首次登录必须修改默认密码，请输入新密码：",
+            echo=QLineEdit.Password,
+        )
+        if not ok:
+            return False
+        confirm, ok = QInputDialog.getText(
+            self,
+            "确认新密码",
+            "请再次输入新密码：",
+            echo=QLineEdit.Password,
+        )
+        if not ok:
+            return False
+        if len(new_pwd) < 8:
+            QMessageBox.warning(self, "提示", "新密码至少需要 8 位")
+            return False
+        if new_pwd != confirm:
+            QMessageBox.warning(self, "提示", "两次输入的新密码不一致")
+            return False
+        UserManager.update_user(username, password=new_pwd)
+        QMessageBox.information(self, "成功", "密码已更新，请妥善保管")
+        return True
 
     def reject(self):
         LogManager.log_logout(self.current_user["username"] if self.current_user else "unknown")

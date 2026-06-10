@@ -2,7 +2,7 @@ import os
 import json
 import numpy as np
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel
-from PyQt5.QtCore import QUrl, Qt
+from PyQt5.QtCore import QObject, QUrl, Qt, pyqtSignal, pyqtSlot
 
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "templates")
@@ -11,6 +11,7 @@ ECHARTS_JS_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(_
 TEMPLATE_MAP = {
     "line": "line_chart.html",
     "bar": "bar_chart.html",
+    "pie": "pie_chart.html",
     "pareto": "pareto_chart.html",
     "heatmap": "heatmap_chart.html",
     "sankey": "sankey_chart.html",
@@ -55,7 +56,17 @@ def _json_dumps(obj):
     return json.dumps(_ensure_js(obj), ensure_ascii=False)
 
 
+class _ChartBridge(QObject):
+    drilldown = pyqtSignal(str)
+
+    @pyqtSlot(str)
+    def emitDrilldown(self, value: str):
+        self.drilldown.emit(value)
+
+
 class EChartWidget(QWidget):
+    drilldown_triggered = pyqtSignal(str)
+
     def __init__(self, chart_type: str = "bar", title: str = "", parent=None):
         super().__init__(parent)
         self._chart_type = chart_type
@@ -63,6 +74,9 @@ class EChartWidget(QWidget):
         self._loaded = False
         self._pending_data = None
         self._webview = None
+        self._channel = None
+        self._bridge = _ChartBridge(self)
+        self._bridge.drilldown.connect(self.drilldown_triggered.emit)
         self._init_ui()
 
     def _init_ui(self):
@@ -77,10 +91,15 @@ class EChartWidget(QWidget):
 
         try:
             from PyQt5.QtWebEngineWidgets import QWebEngineView
+            from PyQt5.QtWebChannel import QWebChannel
             self._webview = QWebEngineView()
             self._webview.setStyleSheet("border: 1px solid #E2E8F0; border-radius: 6px;")
             self._webview.setMinimumHeight(150)
             self._webview.loadFinished.connect(self._on_load_finished)
+
+            self._channel = QWebChannel(self._webview.page())
+            self._channel.registerObject("chartBridge", self._bridge)
+            self._webview.page().setWebChannel(self._channel)
 
             html = _load_template_html(self._chart_type)
             self._webview.setHtml(html, QUrl("about:blank"))
@@ -167,10 +186,24 @@ class ParetoEChart(EChartWidget):
     def __init__(self, title: str = "", parent=None):
         super().__init__("pareto", title, parent)
 
-    def set_data(self, labels: list, values: list):
+    def set_data(self, labels: list, values: list, show_80_line: bool = True):
         super().set_data({
             "labels": labels,
             "values": values,
+            "show80Line": show_80_line,
+        })
+
+
+class PieEChart(EChartWidget):
+    def __init__(self, title: str = "", parent=None):
+        super().__init__("pie", title, parent)
+
+    def set_data(self, labels: list, values: list, colors: list = None, show_percent: bool = True):
+        super().set_data({
+            "labels": labels,
+            "values": values,
+            "colors": colors,
+            "showPercent": show_percent,
         })
 
 

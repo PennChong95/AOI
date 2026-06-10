@@ -2,6 +2,7 @@ import os
 import hashlib
 import time
 from PyQt5.QtGui import QPixmap
+from utils.config_manager import ConfigManager
 
 
 CACHE_TTL = 7 * 24 * 3600
@@ -10,7 +11,8 @@ CACHE_TTL = 7 * 24 * 3600
 class ThumbnailCache:
     def __init__(self, cache_dir: str = None):
         if cache_dir is None:
-            cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cache", "thumbnails")
+            local_base = os.environ.get("LOCALAPPDATA", ConfigManager.CONFIG_DIR)
+            cache_dir = os.path.join(local_base, "InspectionReview", "cache", "thumbnails")
         self.cache_dir = cache_dir
         os.makedirs(self.cache_dir, exist_ok=True)
 

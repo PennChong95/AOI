@@ -1,10 +1,14 @@
 ﻿from typing import Optional, List, Tuple
 from database.manager import DBManager
+import logging
 from database.models import (
     StationResult, InspectionDetailEntity,
     Measurement, ApprDefect, DefectDetailInfo,
     FINAL_RESULT_OK, FINAL_RESULT_NG,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class QueryResult:
@@ -63,6 +67,8 @@ class QueryService:
                 progress_callback("获取详情", f"来源={source_name}")
             try:
                 repo = self.db.get_repository(source_name)
+                if repo is None:
+                    raise ConnectionError(f"数据源不可用: {source_name}")
                 sd_list, insp_list = repo.find_details_batch(sr.Id)
                 result.station_details = sd_list
                 if insp_list:
@@ -72,8 +78,11 @@ class QueryService:
                     result.defect_items = self._build_defect_list(insp_list)
                     if progress_callback:
                         progress_callback("完成", f"{len(result.defect_items)} 个缺陷")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "query details failed: sn=%s source=%s station_result_id=%s error=%s",
+                    sn, source_name, sr.Id, exc,
+                )
             results.append(result)
         return results
 

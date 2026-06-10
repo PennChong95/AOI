@@ -3,14 +3,15 @@
 整合所有功能：KPI、良率趋势、缺陷分布、最近记录
 """
 
+import logging
 from PyQt5.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout, QWidget,
     QSizePolicy, QComboBox, QPushButton, QTableWidget, QTableWidgetItem,
-    QHeaderView, QDateEdit, QScrollArea, QStackedWidget
+    QHeaderView, QDateTimeEdit, QScrollArea, QStackedWidget
 )
-from PyQt5.QtCore import Qt, QDate, pyqtSignal
+from PyQt5.QtCore import Qt, QDateTime, pyqtSignal
 from PyQt5.QtGui import QColor
-from ui.widgets.chart_widget import LineChart, PieChart, BarChart, ParetoChart
+from ui.widgets.echart_widget import LineEChart, PieEChart, BarEChart, ParetoEChart
 from ui.widgets.kpi_card import create_kpi_card, create_kpi_summary_panel, KPIStripPanel
 from ui.theme import Theme
 from utils.config_manager import ConfigManager
@@ -20,6 +21,9 @@ from dashboard.core.dashboard_view import DashboardView
 from dashboard.cards.schematic_heatmap import SchematicHeatmapCard
 from dashboard.cards.image_viewer_card import ImageViewerCard
 from dashboard.core.drilldown_bus import BUS, DrillDownEvent
+
+
+logger = logging.getLogger(__name__)
 
 
 # KPI配置
@@ -43,7 +47,7 @@ class HeaderBar(QWidget):
     
     def _setup_ui(self):
         """设置UI"""
-        self.setFixedHeight(56)
+        self.setFixedHeight(64)
         self.setStyleSheet(f"""
             QWidget {{
                 background: {Theme.get_color('bg_card')};
@@ -116,14 +120,15 @@ class HeaderBar(QWidget):
         # 默认选中今天
         self._time_buttons[0].setChecked(True)
         
-        # 自定义日期范围
-        self._date_start = QDateEdit()
+        # 自定义日期时间范围
+        self._date_start = QDateTimeEdit()
         self._date_start.setCalendarPopup(True)
-        self._date_start.setDate(QDate.currentDate().addDays(-7))
-        self._date_start.setDisplayFormat("yyyy-MM-dd")
+        self._date_start.setDateTime(QDateTime.currentDateTime().addDays(-7))
+        self._date_start.setDisplayFormat("yyyy-MM-dd HH:mm")
         self._date_start.setStyleSheet(self._get_date_style())
+        self._date_start.setMinimumWidth(150)
         self._date_start.setVisible(False)
-        self._date_start.dateChanged.connect(self._on_custom_date_changed)
+        self._date_start.dateTimeChanged.connect(self._on_custom_date_changed)
         layout.addWidget(self._date_start)
         
         self._date_separator = QLabel("~")
@@ -136,14 +141,22 @@ class HeaderBar(QWidget):
         self._date_separator.setVisible(False)
         layout.addWidget(self._date_separator)
         
-        self._date_end = QDateEdit()
+        self._date_end = QDateTimeEdit()
         self._date_end.setCalendarPopup(True)
-        self._date_end.setDate(QDate.currentDate())
-        self._date_end.setDisplayFormat("yyyy-MM-dd")
+        self._date_end.setDateTime(QDateTime.currentDateTime())
+        self._date_end.setDisplayFormat("yyyy-MM-dd HH:mm")
         self._date_end.setStyleSheet(self._get_date_style())
+        self._date_end.setMinimumWidth(150)
         self._date_end.setVisible(False)
-        self._date_end.dateChanged.connect(self._on_custom_date_changed)
+        self._date_end.dateTimeChanged.connect(self._on_custom_date_changed)
         layout.addWidget(self._date_end)
+
+        self._date_apply = QPushButton("应用")
+        self._date_apply.setCursor(Qt.PointingHandCursor)
+        self._date_apply.setStyleSheet(self._get_time_button_style())
+        self._date_apply.setVisible(False)
+        self._date_apply.clicked.connect(self._emit_custom_date)
+        layout.addWidget(self._date_apply)
     
     def _get_combo_style(self):
         """获取下拉框样式"""
@@ -204,16 +217,15 @@ class HeaderBar(QWidget):
     def _get_date_style(self):
         """获取日期选择器样式"""
         return f"""
-            QDateEdit {{
+            QDateTimeEdit {{
                 padding: 6px 10px;
                 border: 1px solid {Theme.get_color('border')};
                 border-radius: {Theme.get_radius('md')}px;
                 background: {Theme.get_color('bg_card')};
                 color: {Theme.get_color('text_primary')};
                 font-size: {Theme.get_font_size('sm')}px;
-                min-width: 100px;
             }}
-            QDateEdit:focus {{
+            QDateTimeEdit:focus {{
                 border-color: {Theme.get_color('primary')};
             }}
         """
@@ -261,16 +273,21 @@ class HeaderBar(QWidget):
         self._date_start.setVisible(visible)
         self._date_separator.setVisible(visible)
         self._date_end.setVisible(visible)
+        self._date_apply.setVisible(visible)
     
     def _on_custom_date_changed(self):
-        """自定义日期变化"""
-        if self._is_custom:
-            self._emit_custom_date()
+        """自定义日期时间变化：只校验，不立即刷新"""
+        if self._date_end.dateTime() < self._date_start.dateTime():
+            self._date_end.blockSignals(True)
+            self._date_end.setDateTime(self._date_start.dateTime())
+            self._date_end.blockSignals(False)
     
     def _emit_custom_date(self):
-        """触发自定义日期信号"""
-        start = self._date_start.date().toString("yyyy-MM-dd")
-        end = self._date_end.date().toString("yyyy-MM-dd")
+        """触发自定义日期时间信号"""
+        if self._date_end.dateTime() < self._date_start.dateTime():
+            self._date_end.setDateTime(self._date_start.dateTime())
+        start = self._date_start.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+        end = self._date_end.dateTime().toString("yyyy-MM-dd HH:mm:ss")
         self.custom_date_changed.emit(start, end)
     
     def get_days(self) -> int:
@@ -280,8 +297,8 @@ class HeaderBar(QWidget):
     def get_date_range(self) -> tuple:
         """获取当前日期范围"""
         if self._is_custom:
-            start = self._date_start.date().toString("yyyy-MM-dd")
-            end = self._date_end.date().toString("yyyy-MM-dd")
+            start = self._date_start.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+            end = self._date_end.dateTime().toString("yyyy-MM-dd HH:mm:ss")
             return (start, end)
         return (None, None)
     
@@ -532,7 +549,7 @@ class HomePage(QWidget):
         self._cards = {}
         self._build_ui()
         self._connect_signals()
-        self._refresh_all()
+        self._refresh_all(update_data=False)
 
     def _build_ui(self):
         self._header = HeaderBar(self.service)
@@ -553,12 +570,12 @@ class HomePage(QWidget):
         kpi_wrapper_layout.addWidget(self._kpi_panel)
         top_layout.addWidget(kpi_wrapper)
 
-        self._trend_chart = LineChart()
+        self._trend_chart = LineEChart()
         self._trend_card = self._make_card("trend", "良率趋势", "📈", self._trend_chart)
 
         self._defect_stack = QStackedWidget()
-        self._defect_donut = PieChart()
-        self._defect_bar = BarChart()
+        self._defect_donut = PieEChart()
+        self._defect_bar = BarEChart()
         self._defect_stack.addWidget(self._defect_donut)  # index 0
         self._defect_stack.addWidget(self._defect_bar)     # index 1
         self._defect_stack.setCurrentIndex(0)
@@ -580,7 +597,7 @@ class HomePage(QWidget):
         """)
         self._defect_toggle_btn.toggled.connect(self._on_defect_toggle)
         self._defect_card.add_header_widget(self._defect_toggle_btn)
-        self._pareto_chart = ParetoChart()
+        self._pareto_chart = ParetoEChart()
         self._pareto_card = self._make_card("pareto", "缺陷Pareto分析", "📊", self._pareto_chart)
 
         self._records_table = RecentRecordsTable()
@@ -694,7 +711,7 @@ class HomePage(QWidget):
             self._image_viewer_card.set_time_range(-1, start_date, end_date)
         self._refresh_all()
 
-    def _refresh_all(self):
+    def _refresh_all(self, update_data: bool = True):
         if self._days >= 0:
             options = self.service.get_granularity_options(self._days)
         else:
@@ -708,7 +725,8 @@ class HomePage(QWidget):
                 for opt in options:
                     combo.addItem(opt["text"], opt["value"])
                 combo.blockSignals(False)
-        self.refresh()
+        if update_data:
+            self.refresh()
 
     def refresh(self):
         attempts = [
@@ -723,7 +741,7 @@ class HomePage(QWidget):
             try:
                 method()
             except Exception as e:
-                print(f"{name}失败: {e}")
+                logger.warning("%s失败: %s", name, e)
         try:
             if self._days >= 0:
                 work_orders = self.service.get_work_orders(self._days)
@@ -731,7 +749,7 @@ class HomePage(QWidget):
                 work_orders = self.service.get_work_orders(30)
             self._header.update_work_orders(work_orders)
         except Exception as e:
-            print(f"更新工单列表失败: {e}")
+            logger.warning("更新工单列表失败: %s", e)
 
     def _refresh_kpi(self):
         if self._days >= 0:
@@ -781,8 +799,10 @@ class HomePage(QWidget):
             self._records_table.update_data(records)
 
     def _refresh_heatmap(self):
-        days = self._days if self._days >= 0 else 30
-        data = self.service.heatmap(days)
+        if self._days >= 0:
+            data = self.service.heatmap(self._days)
+        else:
+            data = self.service.heatmap_custom_date(self._start_date, self._end_date)
         if self._heatmap_widget:
             self._heatmap_widget.set_data(data)
 

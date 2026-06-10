@@ -1,6 +1,7 @@
 ﻿import pymysql
 import json
 import time
+import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
 from database.models import (
@@ -9,6 +10,9 @@ from database.models import (
 )
 from database.router import TableRouter
 from database.deserializer import Deserializer
+
+
+logger = logging.getLogger(__name__)
 
 
 class DBConnection:
@@ -43,8 +47,8 @@ class DBConnection:
         if self.connection:
             try:
                 self.connection.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("close database connection failed: source=%s error=%s", self.source_name, exc)
             self.connection = None
 
     def is_connected(self) -> bool:
@@ -53,7 +57,8 @@ class DBConnection:
         try:
             self.connection.ping(reconnect=False)
             return True
-        except Exception:
+        except Exception as exc:
+            logger.debug("database ping failed: source=%s error=%s", self.source_name, exc)
             return False
 
     def _init_tables(self):
@@ -79,6 +84,7 @@ class DBConnection:
                 INDEX `idx_sn` (`Sn`),
                 INDEX `idx_sn_ctime` (`Sn`, `CreateTime`),
                 INDEX `idx_final_ctime` (`FinalResult`, `CreateTime`),
+                INDEX `idx_review_ctime` (`ReviewResult`, `CreateTime`),
                 INDEX `idx_workorder_ctime` (`WorkOrder`, `CreateTime`),
                 INDEX `idx_ctime` (`CreateTime`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
@@ -120,18 +126,39 @@ class DBConnection:
         ]
         for sql in sqls:
             self._execute(sql)
+        try:
+            self._ensure_index("t_station_result_current", "idx_review_ctime", "ReviewResult,CreateTime")
+        except pymysql.Error as exc:
+            logger.warning("ensure index failed: table=t_station_result_current index=idx_review_ctime error=%s", exc)
+
+    def _ensure_index(self, table_name: str, index_name: str, columns: str):
+        row = self._fetch_one(
+            """
+            SELECT COUNT(1) AS cnt
+            FROM information_schema.statistics
+            WHERE table_schema = DATABASE()
+              AND table_name = %s
+              AND index_name = %s
+            """,
+            (table_name, index_name),
+        )
+        if row and int(row.get("cnt", 0)) > 0:
+            return
+        safe_columns = ", ".join(f"`{c.strip()}`" for c in columns.split(","))
+        self._execute(f"ALTER TABLE `{table_name}` ADD INDEX `{index_name}` ({safe_columns})")
 
     def _ensure_connected(self):
         try:
             if self.connection:
                 self.connection.ping(reconnect=True)
                 return True
-        except pymysql.Error:
-            pass
+        except pymysql.Error as exc:
+            logger.warning("database reconnect ping failed: source=%s error=%s", self.source_name, exc)
         try:
             self.connect()
             return True
-        except Exception:
+        except Exception as exc:
+            logger.warning("database reconnect failed: source=%s error=%s", self.source_name, exc)
             return False
 
     def _execute(self, sql: str, params: tuple = ()) -> int:
@@ -208,33 +235,39 @@ class DBConnection:
     def _try_fetch_one(self, table_name: str, sql_where: str, params: tuple) -> Optional[dict]:
         try:
             return self._fetch_one(f"SELECT * FROM `{table_name}` {sql_where}", params)
-        except pymysql.Error:
+        except pymysql.Error as exc:
+            logger.warning("query failed: source=%s table=%s error=%s", self.source_name, table_name, exc)
             if self._ensure_connected():
                 try:
                     return self._fetch_one(f"SELECT * FROM `{table_name}` {sql_where}", params)
-                except pymysql.Error:
+                except pymysql.Error as retry_exc:
+                    logger.warning("query retry failed: source=%s table=%s error=%s", self.source_name, table_name, retry_exc)
                     return None
             return None
 
     def _try_fetch_all(self, table_name: str, sql_where: str, params: tuple) -> List[dict]:
         try:
             return self._fetch_all(f"SELECT * FROM `{table_name}` {sql_where}", params)
-        except pymysql.Error:
+        except pymysql.Error as exc:
+            logger.warning("query failed: source=%s table=%s error=%s", self.source_name, table_name, exc)
             if self._ensure_connected():
                 try:
                     return self._fetch_all(f"SELECT * FROM `{table_name}` {sql_where}", params)
-                except pymysql.Error:
+                except pymysql.Error as retry_exc:
+                    logger.warning("query retry failed: source=%s table=%s error=%s", self.source_name, table_name, retry_exc)
                     return []
             return []
 
     def _try_execute(self, table_name: str, sql_where: str, params: tuple) -> int:
         try:
             return self._execute(f"UPDATE `{table_name}` {sql_where}", params)
-        except pymysql.Error:
+        except pymysql.Error as exc:
+            logger.warning("update failed: source=%s table=%s error=%s", self.source_name, table_name, exc)
             if self._ensure_connected():
                 try:
                     return self._execute(f"UPDATE `{table_name}` {sql_where}", params)
-                except pymysql.Error:
+                except pymysql.Error as retry_exc:
+                    logger.warning("update retry failed: source=%s table=%s error=%s", self.source_name, table_name, retry_exc)
                     return 0
             return 0
 
@@ -243,9 +276,9 @@ class DBConnection:
         row = self._search_one("t_station_result", "WHERE Sn = %s ORDER BY Id DESC LIMIT 1", (sn,), time_column="CreateTime")
         _t1 = time.perf_counter()
         if row:
-            print(f"[PERF] query_station_result 命中: {(_t1-_t0)*1000:.1f}ms")
+            logger.debug("query_station_result hit: source=%s elapsed_ms=%.1f", self.source_name, (_t1-_t0)*1000)
             return StationResult(**row)
-        print(f"[PERF] query_station_result 未找到: {(_t1-_t0)*1000:.1f}ms")
+        logger.debug("query_station_result miss: source=%s elapsed_ms=%.1f", self.source_name, (_t1-_t0)*1000)
         return None
 
     def query_station_result_by_id(self, result_id: int) -> Optional['StationResult']:
@@ -263,7 +296,7 @@ class DBConnection:
         rows = self._search_all("t_station_detail", "WHERE StationResultId = %s", (result_id,), time_column="StartTime")
         result = self._parse_station_details(rows)
         _t1 = time.perf_counter()
-        print(f"[PERF] query_station_details: SQL+解析={(_t1-_t0)*1000:.1f}ms rows={len(rows)}")
+        logger.debug("query_station_details: source=%s elapsed_ms=%.1f rows=%s", self.source_name, (_t1-_t0)*1000, len(rows))
         return result
 
     def query_inspection_details(self, result_id: int) -> List['InspectionDetailEntity']:
@@ -271,7 +304,7 @@ class DBConnection:
         rows = self._search_all("t_inspection_detail", "WHERE StationResultId = %s", (result_id,), time_column="Time")
         result = self._parse_inspection_details(rows)
         _t1 = time.perf_counter()
-        print(f"[PERF] query_inspection_details: SQL+解析={(_t1-_t0)*1000:.1f}ms rows={len(rows)}")
+        logger.debug("query_inspection_details: source=%s elapsed_ms=%.1f rows=%s", self.source_name, (_t1-_t0)*1000, len(rows))
         return result
 
     def query_details_batch(self, result_id: int) -> Tuple[List['StationDetail'], List['InspectionDetailEntity']]:
@@ -280,7 +313,7 @@ class DBConnection:
         sd = self.query_station_details(result_id)
         insp = self.query_inspection_details(result_id)
         _t1 = time.perf_counter()
-        print(f"[PERF] query_details_batch total: {(_t1-_t0)*1000:.1f}ms")
+        logger.debug("query_details_batch: source=%s elapsed_ms=%.1f", self.source_name, (_t1-_t0)*1000)
         return sd, insp
 
     def _parse_station_details(self, rows: List[dict]) -> List['StationDetail']:
@@ -289,7 +322,7 @@ class DBConnection:
     def _parse_inspection_details(self, rows: List[dict]) -> List['InspectionDetailEntity']:
         return self.deserializer.parse_inspection_details(rows)
 
-    def update_review(self, sn: str, review_result: int, review_user: str, review_remark: str = ""):
+    def update_review(self, sn: str, review_result: int, review_user: str, review_remark: str = "") -> bool:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         set_clause = "SET ReviewResult = %s, ReviewUser = %s, ReviewTime = %s, ReviewRemark = %s, UpdateTime = %s WHERE Sn = %s ORDER BY Id DESC LIMIT 1"
         params = (review_result, review_user, now, review_remark, now, sn)
@@ -297,7 +330,8 @@ class DBConnection:
         for table in self.router.build_table_list("t_station_result"):
             affected = self._try_execute(table, set_clause, params)
             if affected:
-                return
+                return True
+        return False
 
 
 class DBManager:
@@ -324,6 +358,7 @@ class DBManager:
             try:
                 conn.connect()
             except Exception as e:
+                logger.warning("connect database failed: source=%s error=%s", conn.source_name, e)
                 errors.append(str(e))
         ok = len(errors) < len(self.connections)
         return ok, errors
@@ -353,7 +388,8 @@ class DBManager:
             try:
                 conn.query_start_time = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S") if start_str else None
                 conn.query_end_time = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S") if end_str else None
-            except Exception:
+            except Exception as exc:
+                logger.warning("invalid query time range: source=%s start=%s end=%s error=%s", conn.source_name, start_str, end_str, exc)
                 conn.query_start_time = None
                 conn.query_end_time = None
 
@@ -372,8 +408,8 @@ class DBManager:
                 sr = conn.query_station_result(sn)
                 if sr:
                     results.append((sr, conn.source_name))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("query station result failed: source=%s sn=%s error=%s", conn.source_name, sn, exc)
         return results
 
     def query_station_results_all(self, sn: str) -> List[Tuple['StationResult', str]]:
@@ -385,8 +421,8 @@ class DBManager:
                 rows = conn.query_station_results_all(sn)
                 for r in rows:
                     results.append((r, conn.source_name))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("query station results failed: source=%s sn=%s error=%s", conn.source_name, sn, exc)
         return results
 
     def query_station_details(self, result_id: int, source_name: str = "") -> List['StationDetail']:
@@ -407,10 +443,11 @@ class DBManager:
             return conn.query_details_batch(result_id)
         return [], []
 
-    def update_review(self, sn: str, review_result: int, review_user: str, review_remark: str = "", source_name: str = ""):
+    def update_review(self, sn: str, review_result: int, review_user: str, review_remark: str = "", source_name: str = "") -> bool:
         conn = self.get_connection(source_name) if source_name else self.get_first_connected()
         if conn and conn.is_connected():
-            conn.update_review(sn, review_result, review_user, review_remark)
+            return conn.update_review(sn, review_result, review_user, review_remark)
+        return False
 
     def get_repository(self, source_name: str = ""):
         from services.station_repo import StationRepository

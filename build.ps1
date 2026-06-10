@@ -32,7 +32,6 @@ python -m nuitka --standalone --windows-console-mode=disable --assume-yes-for-do
     --include-package=services `
     --include-package=ui `
     --include-package=utils `
-    --include-package=matplotlib `
     --include-data-dir=ui/web=ui/web `
     --include-data-dir=data=data `
     --include-data-dir=config=config `

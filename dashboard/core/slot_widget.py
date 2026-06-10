@@ -1,5 +1,5 @@
-from PyQt5.QtWidgets import QFrame, QVBoxLayout, QLabel
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import QFrame, QVBoxLayout, QLabel, QWidget
+from PyQt5.QtCore import Qt, QEvent, pyqtSignal
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent
 
 
@@ -35,16 +35,38 @@ class SlotWidget(QFrame):
                 padding: 20px;
             }
         """)
+        self._placeholder.setAcceptDrops(True)
+        self._placeholder.installEventFilter(self)
         self._layout.addWidget(self._placeholder)
 
     def set_card(self, card):
         self._placeholder.setVisible(card is None)
         if self.current_card:
+            self._uninstall_drop_proxy(self.current_card)
             self.current_card.setParent(None)
         self.current_card = card
         if card:
             self._layout.addWidget(card)
+            self._install_drop_proxy(card)
             card.show()
+
+    def _install_drop_proxy(self, root: QWidget):
+        root.setAcceptDrops(True)
+        root.installEventFilter(self)
+        for child in root.findChildren(QWidget):
+            child.setAcceptDrops(True)
+            child.installEventFilter(self)
+
+    def _uninstall_drop_proxy(self, root: QWidget):
+        try:
+            root.removeEventFilter(self)
+        except Exception:
+            pass
+        for child in root.findChildren(QWidget):
+            try:
+                child.removeEventFilter(self)
+            except Exception:
+                pass
 
     def set_activated(self, activated: bool):
         self._activated = activated
@@ -91,9 +113,11 @@ class SlotWidget(QFrame):
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasFormat("application/card-id"):
-            self._drag_hover = True
-            self._update_style()
-            event.acceptProposedAction()
+            self._accept_drag(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat("application/card-id"):
+            self._accept_drag(event)
 
     def dragLeaveEvent(self, event):
         self._drag_hover = False
@@ -101,6 +125,29 @@ class SlotWidget(QFrame):
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event: QDropEvent):
+        self._handle_drop(event)
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.DragEnter, QEvent.DragMove):
+            if event.mimeData().hasFormat("application/card-id"):
+                self._accept_drag(event)
+                return True
+        if event.type() == QEvent.DragLeave:
+            self._drag_hover = False
+            self._update_style()
+            return False
+        if event.type() == QEvent.Drop:
+            if event.mimeData().hasFormat("application/card-id"):
+                self._handle_drop(event)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _accept_drag(self, event):
+        self._drag_hover = True
+        self._update_style()
+        event.acceptProposedAction()
+
+    def _handle_drop(self, event):
         self._drag_hover = False
         self._update_style()
         card_id = bytes(event.mimeData().data("application/card-id")).decode()

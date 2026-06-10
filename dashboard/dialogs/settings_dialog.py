@@ -8,6 +8,13 @@ from PyQt5.QtCore import Qt, pyqtSignal
 class DashboardSettingsDialog(QDialog):
     """看板设置弹窗：布局预设 + 自动刷新"""
 
+    REFRESH_OPTIONS = [
+        ("关闭", 0),
+        ("5分钟", 300),
+        ("10分钟", 600),
+        ("30分钟", 1800),
+    ]
+
     layout_applied = pyqtSignal(str)
     save_requested = pyqtSignal()
     load_requested = pyqtSignal()
@@ -80,7 +87,8 @@ class DashboardSettingsDialog(QDialog):
 
         rf_layout.addWidget(self._make_label("刷新间隔:"))
         self._refresh_combo = QComboBox()
-        self._refresh_combo.addItems(["关闭", "30秒", "60秒", "120秒", "300秒"])
+        for text, seconds in self.REFRESH_OPTIONS:
+            self._refresh_combo.addItem(text, seconds)
         self._refresh_combo.setCurrentIndex(0)
         self._refresh_combo.setStyleSheet(self._combo_style())
         self._refresh_combo.currentIndexChanged.connect(self._on_refresh_changed)
@@ -170,14 +178,13 @@ class DashboardSettingsDialog(QDialog):
 
     def get_refresh_interval(self) -> int:
         """获取当前刷新间隔（秒）"""
-        mapping = {"关闭": 0, "30秒": 30, "60秒": 60, "120秒": 120, "300秒": 300}
-        return mapping.get(self._refresh_combo.currentText(), 0)
+        return int(self._refresh_combo.currentData() or 0)
 
     def set_refresh_interval(self, seconds: int):
         """设置刷新间隔显示"""
-        rev = {0: "关闭", 30: "30秒", 60: "60秒", 120: "120秒", 300: "300秒"}
-        text = rev.get(seconds, "关闭")
-        idx = self._refresh_combo.findText(text)
+        if seconds and seconds < 300:
+            seconds = 300
+        idx = self._refresh_combo.findData(seconds)
         if idx >= 0:
             self._refresh_combo.setCurrentIndex(idx)
 

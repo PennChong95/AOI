@@ -1,5 +1,6 @@
 ﻿import os
 import cv2
+import logging
 import numpy as np
 import pyqtgraph as pg
 from datetime import datetime, timedelta
@@ -34,6 +35,9 @@ from database.models import (
     DefectDetailInfo, InspectionDetailEntity,
     FINAL_RESULT_OK, FINAL_RESULT_NG, REVIEW_OK,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class SchematicWrapper(QWidget):
@@ -395,6 +399,7 @@ class MainWindow(QMainWindow):
         self._region_matcher = RegionNameMatcher()
         self._mode_settings = RejudgeSettings()
         self._mode_manager = ModeSwitchManager(self)
+        self._dashboard_prewarm_thread = None
 
         self._timeout_minutes = int(self.config.get("session_timeout_minutes", 30))
         self._reauth_seconds = int(self.config.get("session_reauthenticate_seconds", 60))
@@ -427,6 +432,7 @@ class MainWindow(QMainWindow):
         role_display = role_display_name(role)
         self._show_status(f"当前用户: {username} ({role_display}) | 欢迎使用")
         self._reset_session_timer()
+        QTimer.singleShot(800, self._start_dashboard_cache_prewarm)
 
     def _migrate_legacy_regions(self):
         legacy_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "region.json")
@@ -436,7 +442,7 @@ class MainWindow(QMainWindow):
                 os.rename(legacy_path, legacy_path + ".bak")
                 self._show_status("已迁移旧版 region.json 到 layouts/ 目录")
             except Exception as e:
-                print(f"迁移失败: {e}")
+                logger.warning("迁移旧版 region.json 失败: %s", e)
         self._load_product_regions()
 
     def _on_layout_applied(self, layout):
@@ -477,6 +483,24 @@ class MainWindow(QMainWindow):
         LogManager.log_logout(self.username)
         QMessageBox.information(self, "会话超时", "未在有效时间内完成验证，系统将自动退出")
         self.close()
+
+    def _start_dashboard_cache_prewarm(self):
+        if self._dashboard_prewarm_thread and self._dashboard_prewarm_thread.isRunning():
+            return
+        try:
+            from services.dashboard_prewarm import DashboardPrewarmThread
+            db_configs = ConfigManager.get_databases(ConfigManager.load())
+            self._dashboard_prewarm_thread = DashboardPrewarmThread(db_configs, self)
+            self._dashboard_prewarm_thread.finished_with_status.connect(self._on_dashboard_cache_prewarmed)
+            self._dashboard_prewarm_thread.start()
+        except Exception as exc:
+            logger.warning("start dashboard cache prewarm failed: %s", exc)
+
+    def _on_dashboard_cache_prewarmed(self, ok: bool, message: str):
+        if ok:
+            logger.info("dashboard cache prewarm completed")
+        else:
+            logger.warning("dashboard cache prewarm incomplete: %s", message)
 
     def _apply_role_permissions(self):
         can_review_by_role = self._can_review or self.role == ROLE_ADMIN

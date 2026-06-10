@@ -13,11 +13,25 @@ body {
 </head>
 <body>
 <div id="chart"></div>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script src="../echarts/echarts.min.js"></script>
 <script>
 var chart = echarts.init(document.getElementById('chart'), 'light');
+var chartBridge = null;
 
 var COLORS = ['#3B82F6', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#EC4899', '#06B6D4', '#F97316', '#84CC16', '#64748B'];
+
+if (typeof QWebChannel !== 'undefined' && typeof qt !== 'undefined') {
+    new QWebChannel(qt.webChannelTransport, function(channel) {
+        chartBridge = channel.objects.chartBridge;
+    });
+}
+
+chart.on('click', function(params) {
+    if (chartBridge && params && params.name) {
+        chartBridge.emitDrilldown(String(params.name).split('\n')[0]);
+    }
+});
 
 function renderBarChart(data) {
     var d = JSON.parse(data);

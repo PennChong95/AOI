@@ -1,5 +1,10 @@
 import json
 import os
+import base64
+import hashlib
+import hmac
+import logging
+import secrets
 from datetime import datetime
 from typing import Optional, List, Dict
 
@@ -59,6 +64,7 @@ class ConfigManager:
         "review_constraint_measurement_enabled": True,
         "review_constraint_appearance_names": [],
         "dashboard_kpi_items": ["total", "ok", "ng", "yield_rate", "review_ok", "review_ng", "post_review_yield_rate"],
+        "dashboard_refresh_interval": 0,
     }
 
     LOGIN_MODE_FINGERPRINT = "fingerprint"
@@ -109,19 +115,87 @@ class ConfigManager:
 
 class UserManager:
     USERS_PATH = os.path.join(ConfigManager.CONFIG_DIR, "users.json")
+    HASH_PREFIX = "pbkdf2_sha256"
+    HASH_ITERATIONS = 260000
 
     DEFAULTS = [
-        {"username": "admin", "password": "admin123", "role": ROLE_ADMIN, "fingerprint_template": "", "can_review": True},
+        {"username": "admin", "password": "", "password_hash": "", "must_change_password": True, "role": ROLE_ADMIN, "fingerprint_template": "", "can_review": True},
         {"username": "质检员01", "password": "", "role": ROLE_INSPECTOR, "fingerprint_template": "", "can_review": True},
         {"username": "作业员01", "password": "", "role": ROLE_OPERATOR, "fingerprint_template": "", "can_review": True},
     ]
+
+    @classmethod
+    def _hash_password(cls, password: str, salt: bytes = None) -> str:
+        salt = salt or secrets.token_bytes(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, cls.HASH_ITERATIONS)
+        return "$".join([
+            cls.HASH_PREFIX,
+            str(cls.HASH_ITERATIONS),
+            base64.b64encode(salt).decode("ascii"),
+            base64.b64encode(digest).decode("ascii"),
+        ])
+
+    @classmethod
+    def _verify_hash(cls, password: str, password_hash: str) -> bool:
+        try:
+            prefix, rounds, salt_b64, digest_b64 = password_hash.split("$", 3)
+            if prefix != cls.HASH_PREFIX:
+                return False
+            salt = base64.b64decode(salt_b64)
+            expected = base64.b64decode(digest_b64)
+            actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(rounds))
+            return hmac.compare_digest(actual, expected)
+        except Exception:
+            return False
+
+    @classmethod
+    def _normalize_user(cls, user: dict) -> dict:
+        user.setdefault("password", "")
+        user.setdefault("password_hash", "")
+        user.setdefault("fingerprint_template", "")
+        user.setdefault("can_review", True)
+        return user
+
+    @classmethod
+    def _default_users(cls) -> List[dict]:
+        users = [dict(u) for u in cls.DEFAULTS]
+        for u in users:
+            cls._normalize_user(u)
+            if u.get("username") == "admin" and not u.get("password_hash"):
+                u["password_hash"] = cls._hash_password("admin123")
+        return users
+
+    @classmethod
+    def _migrate_legacy_passwords(cls, users: List[dict]) -> bool:
+        changed = False
+        for u in users:
+            cls._normalize_user(u)
+            legacy_password = u.get("password", "")
+            if legacy_password and not u.get("password_hash"):
+                u["password_hash"] = cls._hash_password(str(legacy_password))
+                if u.get("username") == "admin" and str(legacy_password) == "admin123":
+                    u["must_change_password"] = True
+                u["password"] = ""
+                changed = True
+        return changed
+
+    @classmethod
+    def password_is_set(cls, user: dict) -> bool:
+        return bool(user.get("password_hash") or user.get("password"))
+
+    @classmethod
+    def verify_password(cls, user: dict, password: str) -> bool:
+        if user.get("password_hash"):
+            return cls._verify_hash(password, user.get("password_hash", ""))
+        legacy_password = user.get("password", "")
+        return bool(legacy_password) and hmac.compare_digest(str(legacy_password), password)
 
     @classmethod
     def _ensure_file(cls):
         if not os.path.exists(cls.USERS_PATH):
             os.makedirs(os.path.dirname(cls.USERS_PATH), exist_ok=True)
             with open(cls.USERS_PATH, "w", encoding="utf-8") as f:
-                json.dump(cls.DEFAULTS, f, ensure_ascii=False, indent=2)
+                json.dump(cls._default_users(), f, ensure_ascii=False, indent=2)
 
     @classmethod
     def load_users(cls) -> List[dict]:
@@ -130,14 +204,17 @@ class UserManager:
             with open(cls.USERS_PATH, "r", encoding="utf-8") as f:
                 users = json.load(f)
                 for u in users:
-                    u.setdefault("fingerprint_template", "")
-                    u.setdefault("can_review", True)
+                    cls._normalize_user(u)
+                if cls._migrate_legacy_passwords(users):
+                    cls.save_users(users)
                 return users
         except Exception:
-            return list(cls.DEFAULTS)
+            return cls._default_users()
 
     @classmethod
     def save_users(cls, users: List[dict]):
+        for u in users:
+            cls._normalize_user(u)
         os.makedirs(os.path.dirname(cls.USERS_PATH), exist_ok=True)
         with open(cls.USERS_PATH, "w", encoding="utf-8") as f:
             json.dump(users, f, ensure_ascii=False, indent=2)
@@ -146,7 +223,7 @@ class UserManager:
     def verify_login(cls, username: str, password: str) -> Optional[dict]:
         users = cls.load_users()
         for u in users:
-            if u["username"] == username and u.get("password", "") == password:
+            if u["username"] == username and cls.verify_password(u, password):
                 return u
         return None
 
@@ -183,7 +260,8 @@ class UserManager:
             can_review = True
         users.append({
             "username": username,
-            "password": password,
+            "password": "",
+            "password_hash": cls._hash_password(password) if password else "",
             "role": role,
             "fingerprint_template": "",
             "can_review": can_review,
@@ -202,7 +280,9 @@ class UserManager:
                         raise ValueError(f"用户名 [{new_username}] 已存在")
                     u["username"] = new_username
                 if password is not None:
-                    u["password"] = password
+                    u["password"] = ""
+                    u["password_hash"] = cls._hash_password(password) if password else ""
+                    u["must_change_password"] = False
                 if role is not None:
                     u["role"] = role
                 if fingerprint_template is not None:
@@ -226,20 +306,29 @@ class LogManager:
     LOGIN_LOG = "LOGIN"
     OPERATION_LOG = "OPERATION"
     SYSTEM_LOG = "SYSTEM"
+    _logging_configured = False
 
     @classmethod
     def _log_dir(cls) -> str:
-        if hasattr(sys, '_MEIPASS'):
-            base = os.path.dirname(sys.executable)
-        else:
-            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        log_dir = os.path.join(base, "log")
-        return log_dir
+        return os.path.join(ConfigManager.CONFIG_DIR, "log")
 
     @classmethod
     def _log_path(cls) -> str:
         today = datetime.now().strftime("%Y-%m-%d")
         return os.path.join(cls._log_dir(), f"{today}.txt")
+
+    @classmethod
+    def setup_logging(cls):
+        if cls._logging_configured:
+            return
+        os.makedirs(cls._log_dir(), exist_ok=True)
+        logging.basicConfig(
+            filename=os.path.join(cls._log_dir(), "app.log"),
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            encoding="utf-8",
+        )
+        cls._logging_configured = True
 
     @classmethod
     def _write(cls, log_type: str, username: str, message: str, detail: str = ""):
@@ -254,7 +343,7 @@ class LogManager:
             with open(cls._log_path(), "a", encoding="utf-8") as f:
                 f.write(line)
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("write operation log failed")
 
     @classmethod
     def add_log(cls, log_type: str, username: str, message: str, detail: str = ""):
@@ -279,6 +368,15 @@ class LogManager:
     @classmethod
     def log_system(cls, message: str, detail: str = ""):
         cls._write(cls.SYSTEM_LOG, "system", message, detail)
+
+    @classmethod
+    def log_exception(cls, message: str, exc: Exception = None, detail: str = ""):
+        if exc:
+            logging.getLogger(__name__).exception("%s | %s", message, detail)
+            cls._write(cls.SYSTEM_LOG, "system", message, f"{detail} | {type(exc).__name__}: {exc}")
+        else:
+            logging.getLogger(__name__).error("%s | %s", message, detail)
+            cls._write(cls.SYSTEM_LOG, "system", message, detail)
 
     @classmethod
     def log_fingerprint_init(cls, success: bool, detail: str = ""):

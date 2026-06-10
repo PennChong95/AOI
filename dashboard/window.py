@@ -146,9 +146,12 @@ class DashboardWindow(QDialog):
         super().__init__(parent)
         self.db_manager = db_manager
         self._service = DashboardService(db_manager)
-        self._refresh_interval = 0
+        config = ConfigManager.load()
+        self._refresh_interval = self._normalize_refresh_interval(
+            int(config.get("dashboard_refresh_interval", 0) or 0)
+        )
         self._auto_timer = QTimer(self)
-        self._auto_timer.timeout.connect(self.refresh)
+        self._auto_timer.timeout.connect(self._on_auto_refresh)
         
         self.setWindowTitle("AOI质量分析看板")
         self.setMinimumSize(1200, 800)
@@ -163,6 +166,8 @@ class DashboardWindow(QDialog):
         self._setup_ui()
         self._connect_signals()
         
+        if self._refresh_interval > 0:
+            self._auto_timer.start(self._refresh_interval * 1000)
         QTimer.singleShot(100, self.refresh)
     
     def _setup_ui(self):
@@ -177,13 +182,22 @@ class DashboardWindow(QDialog):
         root.addWidget(self._home_page, 1)
     
     def _connect_signals(self):
-        self._top_bar.refresh_clicked.connect(self.refresh)
+        self._top_bar.refresh_clicked.connect(self.force_refresh)
         self._top_bar.export_clicked.connect(self._show_export_dialog)
         self._top_bar.settings_clicked.connect(self._show_settings_dialog)
     
     def refresh(self):
         self._home_page.refresh()
         self._top_bar.update_refresh_time()
+
+    def force_refresh(self):
+        self._service.invalidate_cache()
+        self.refresh()
+
+    def _on_auto_refresh(self):
+        if not self.isVisible() or self.isMinimized():
+            return
+        self.refresh()
     
     def _show_export_dialog(self):
         dialog = ExportReportDialog(self._service, self)
@@ -206,20 +220,28 @@ class DashboardWindow(QDialog):
             new_items = dialog.get_selected_kpi_items()
             config = ConfigManager.load()
             config["dashboard_kpi_items"] = new_items
+            config["dashboard_refresh_interval"] = self._refresh_interval
             ConfigManager.save(config)
             self._home_page.set_kpi_items(new_items)
             self.refresh()
     
     def _on_refresh_interval_changed(self, seconds: int):
+        seconds = self._normalize_refresh_interval(seconds)
         self._refresh_interval = seconds
         if seconds > 0:
             self._auto_timer.start(seconds * 1000)
         else:
             self._auto_timer.stop()
+
+    @staticmethod
+    def _normalize_refresh_interval(seconds: int) -> int:
+        if seconds <= 0:
+            return 0
+        return max(300, seconds)
     
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key_F5:
-            self.refresh()
+            self.force_refresh()
             event.accept()
             return
         elif event.key() == Qt.Key_Escape:

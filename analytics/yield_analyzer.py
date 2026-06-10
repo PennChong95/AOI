@@ -1,7 +1,11 @@
 from datetime import datetime
 from typing import List, Optional
+import logging
 from database.manager import DBConnection
 from analytics.cache import cached
+
+
+logger = logging.getLogger(__name__)
 
 
 class YieldAnalyzer:
@@ -10,12 +14,13 @@ class YieldAnalyzer:
 
     @cached(key_fn=lambda self, start, end: f"yield_kpi:{start}:{end}")
     def kpi(self, start: datetime, end: datetime) -> dict:
-        total = self._count("t_station_result", start, end)
-        ok = self._count("t_station_result", start, end, final_result=1)
-        ng = self._count("t_station_result", start, end, final_result=2)
-        review_ok = self._count("t_station_result", start, end, review_result=1)
-        review_ng = self._count("t_station_result", start, end, review_result=2)
-        effective = self._count_effective(start, end)
+        metrics = self._aggregate_kpi(start, end)
+        total = metrics["total"]
+        ok = metrics["ok"]
+        ng = metrics["ng"]
+        review_ok = metrics["review_ok"]
+        review_ng = metrics["review_ng"]
+        effective_ok = metrics["effective_ok"]
         return {
             "total": total,
             "ok": ok,
@@ -23,8 +28,33 @@ class YieldAnalyzer:
             "yield_rate": round(ok / total * 100, 1) if total else 0,
             "review_ok": review_ok,
             "review_ng": review_ng,
-            "post_review_yield_rate": round(effective["ok"] / effective["total"] * 100, 1) if effective["total"] else 0,
+            "post_review_yield_rate": round(effective_ok / total * 100, 1) if total else 0,
         }
+
+    def _aggregate_kpi(self, start: datetime, end: datetime) -> dict:
+        tables = self._get_tables(start, end)
+        result = {"total": 0, "ok": 0, "ng": 0, "review_ok": 0, "review_ng": 0, "effective_ok": 0}
+        for table in tables:
+            sql = f"""
+                SELECT COUNT(*) AS total,
+                       COALESCE(SUM(CASE WHEN FinalResult = 1 THEN 1 ELSE 0 END), 0) AS ok,
+                       COALESCE(SUM(CASE WHEN FinalResult = 2 THEN 1 ELSE 0 END), 0) AS ng,
+                       COALESCE(SUM(CASE WHEN ReviewResult = 1 THEN 1 ELSE 0 END), 0) AS review_ok,
+                       COALESCE(SUM(CASE WHEN ReviewResult = 2 THEN 1 ELSE 0 END), 0) AS review_ng,
+                       COALESCE(SUM(CASE
+                           WHEN ReviewResult = 1 THEN 1
+                           WHEN ReviewResult = 2 THEN 0
+                           WHEN FinalResult  = 1 THEN 1
+                           ELSE 0
+                       END), 0) AS effective_ok
+                FROM `{table}`
+                WHERE CreateTime BETWEEN %s AND %s
+            """
+            row = self._fetch_one(sql, (start, end))
+            if row:
+                for key in result:
+                    result[key] += int(row.get(key) or 0)
+        return result
 
     @cached(key_fn=lambda self, start, end, granularity: f"yield_trend:{start}:{end}:{granularity}")
     def trend(self, start: datetime, end: datetime, granularity: str = "day") -> List[dict]:
@@ -107,7 +137,6 @@ class YieldAnalyzer:
         return total
 
     def _get_tables(self, start: datetime, end: datetime) -> list:
-        where = "WHERE 1=1"
         yield_analysis = self.conn.router
         yield_analysis.set_time_range(start, end)
         return yield_analysis._build_table_list("t_station_result")
@@ -117,7 +146,8 @@ class YieldAnalyzer:
             with self.conn.connection.cursor() as cursor:
                 cursor.execute(sql, params)
                 return cursor.fetchone()
-        except Exception:
+        except Exception as exc:
+            logger.warning("yield fetch_one failed: error=%s", exc)
             return None
 
     def _fetch_all(self, sql: str, params: tuple) -> List[dict]:
@@ -125,7 +155,8 @@ class YieldAnalyzer:
             with self.conn.connection.cursor() as cursor:
                 cursor.execute(sql, params)
                 return cursor.fetchall()
-        except Exception:
+        except Exception as exc:
+            logger.warning("yield fetch_all failed: error=%s", exc)
             return []
 
     def _merge_results(self, results: List[dict]) -> List[dict]:

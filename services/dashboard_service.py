@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 from database.manager import DBManager
 from analytics.yield_analyzer import YieldAnalyzer
 from analytics.defect_analyzer import DefectAnalyzer
@@ -33,9 +33,12 @@ TIME_RANGE_GRANULARITY = {
 
 
 class DashboardService:
+    _shared_cache = DashboardCache()
+
     def __init__(self, db_manager: DBManager):
         self.db_manager = db_manager
-        self._cache = DashboardCache()
+        self._cache = self._shared_cache
+        self._cache_prefix = "|".join(db_manager.active_sources) or "default"
 
     def _get_conn(self) -> Optional[object]:
         return self.db_manager.get_first_connected()
@@ -51,6 +54,35 @@ class DashboardService:
             start = datetime(d.year, d.month, d.day, 0, 0, 0)
         return start, end
 
+    def _cache_get(self, key: str):
+        return self._cache.get(self._make_cache_key(key))
+
+    def _cache_set(self, key: str, value):
+        self._cache.set(self._make_cache_key(key), value)
+        return value
+
+    def _make_cache_key(self, key: str) -> str:
+        return f"{self._cache_prefix}:{key}"
+
+    def _cached(self, key: str, loader):
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+        return self._cache_set(key, loader())
+
+    def invalidate_cache(self):
+        self._cache.invalidate()
+
+    def prewarm_common_ranges(self):
+        """Warm the dashboard cache for the default views without touching UI widgets."""
+        for days in (0, 7, 30):
+            self.kpi_trend(days)
+            self.yield_trend_granularity(days, "day")
+            self.defect_distribution_granularity(days, "day", 10)
+            self.recent_records(20, "ng", days)
+            self.get_work_orders(days)
+            self.heatmap(days)
+
     def get_granularity_options(self, days: int) -> List[dict]:
         """获取指定时间范围的粒度选项"""
         return TIME_RANGE_GRANULARITY.get(days, TIME_RANGE_GRANULARITY[7])
@@ -59,13 +91,15 @@ class DashboardService:
         conn = self._get_conn()
         if not conn:
             return {}
-        start, end = self._range(days)
-        return YieldAnalyzer(conn).kpi(start, end)
+        return self._cached(f"kpi:{days}", lambda: YieldAnalyzer(conn).kpi(*self._range(days)))
 
     def kpi_trend(self, days: int = 0) -> dict:
         conn = self._get_conn()
         if not conn:
             return {"current": {}, "previous": {}, "deltas": {}}
+        cached = self._cache_get(f"kpi_trend:{days}")
+        if cached is not None:
+            return cached
         start, end = self._range(days)
         span = end - start
         prev_start = start - span
@@ -84,14 +118,16 @@ class DashboardService:
                     deltas[key] = 0
             else:
                 deltas[key] = 0
-        return {"current": curr, "previous": prev, "deltas": deltas}
+        return self._cache_set(f"kpi_trend:{days}", {"current": curr, "previous": prev, "deltas": deltas})
 
     def yield_trend(self, days: int = 7, granularity: str = "day") -> List[dict]:
         conn = self._get_conn()
         if not conn:
             return []
-        start, end = self._range(days)
-        return YieldAnalyzer(conn).trend(start, end, granularity)
+        return self._cached(
+            f"yield_trend:{days}:{granularity}",
+            lambda: YieldAnalyzer(conn).trend(*self._range(days), granularity),
+        )
 
     def yield_trend_granularity(self, days: int, granularity: str) -> List[dict]:
         """
@@ -104,39 +140,42 @@ class DashboardService:
         conn = self._get_conn()
         if not conn:
             return []
+        cache_key = f"yield_trend_granularity:{days}:{granularity}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         
         # 根据粒度调整时间范围
         if granularity == "10min":
             end = datetime.now()
             start = end - timedelta(minutes=10)
-            return YieldAnalyzer(conn).trend(start, end, "minute")
+            return self._cache_set(cache_key, YieldAnalyzer(conn).trend(start, end, "minute"))
         elif granularity == "30min":
             end = datetime.now()
             start = end - timedelta(minutes=30)
-            return YieldAnalyzer(conn).trend(start, end, "minute")
+            return self._cache_set(cache_key, YieldAnalyzer(conn).trend(start, end, "minute"))
         elif granularity == "1hour":
             end = datetime.now()
             start = end - timedelta(hours=1)
-            return YieldAnalyzer(conn).trend(start, end, "minute")
+            return self._cache_set(cache_key, YieldAnalyzer(conn).trend(start, end, "minute"))
         elif granularity == "6hour":
             end = datetime.now()
             start = end - timedelta(hours=6)
-            return YieldAnalyzer(conn).trend(start, end, "minute")
+            return self._cache_set(cache_key, YieldAnalyzer(conn).trend(start, end, "minute"))
         elif granularity == "all":
             # 使用全部时间范围，按天粒度
             start, end = self._range(days)
-            return YieldAnalyzer(conn).trend(start, end, "day")
+            return self._cache_set(cache_key, YieldAnalyzer(conn).trend(start, end, "day"))
         else:
             # day, week, month
             start, end = self._range(days)
-            return YieldAnalyzer(conn).trend(start, end, granularity)
+            return self._cache_set(cache_key, YieldAnalyzer(conn).trend(start, end, granularity))
 
     def top_defects(self, days: int = 7, top_n: int = 10) -> List[dict]:
         conn = self._get_conn()
         if not conn:
             return []
-        start, end = self._range(days)
-        return DefectAnalyzer(conn).top_defects(start, end, top_n)
+        return self._cached(f"top_defects:{days}:{top_n}", lambda: DefectAnalyzer(conn).top_defects(*self._range(days), top_n))
 
     def defect_distribution(self, days: int = 0, top_n: int = 10) -> List[dict]:
         """
@@ -145,8 +184,10 @@ class DashboardService:
         conn = self._get_conn()
         if not conn:
             return []
-        start, end = self._range(days)
-        return DefectAnalyzer(conn).defect_distribution(start, end, top_n)
+        return self._cached(
+            f"defect_distribution:{days}:{top_n}",
+            lambda: DefectAnalyzer(conn).defect_distribution(*self._range(days), top_n),
+        )
 
     def defect_distribution_granularity(self, days: int, granularity: str, top_n: int = 10) -> List[dict]:
         """
@@ -160,6 +201,10 @@ class DashboardService:
         conn = self._get_conn()
         if not conn:
             return []
+        cache_key = f"defect_distribution_granularity:{days}:{granularity}:{top_n}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         
         # 根据粒度调整时间范围
         if granularity == "10min":
@@ -177,7 +222,7 @@ class DashboardService:
         else:
             start, end = self._range(days)
         
-        return DefectAnalyzer(conn).defect_distribution(start, end, top_n)
+        return self._cache_set(cache_key, DefectAnalyzer(conn).defect_distribution(start, end, top_n))
 
     def recent_records(self, limit: int = 20, result_filter: str = "ng", days: int = 0) -> List[dict]:
         """
@@ -191,14 +236,19 @@ class DashboardService:
         conn = self._get_conn()
         if not conn:
             return []
-        start, end = self._range(days)
-        return DefectAnalyzer(conn).recent_records(start, end, limit, result_filter)
+        return self._cached(
+            f"recent_records:{days}:{result_filter}:{limit}",
+            lambda: DefectAnalyzer(conn).recent_records(*self._range(days), limit, result_filter),
+        )
 
     def get_work_orders(self, days: int = 7) -> List[str]:
         """获取工单列表（动态）"""
         conn = self._get_conn()
         if not conn:
             return []
+        cached = self._cache_get(f"work_orders:{days}")
+        if cached is not None:
+            return cached
         
         # 从station_result表中获取工单列表
         try:
@@ -216,7 +266,7 @@ class DashboardService:
                     if wo:
                         work_orders.add(wo)
             
-            return sorted(list(work_orders))
+            return self._cache_set(f"work_orders:{days}", sorted(list(work_orders)))
         except Exception:
             return []
 
@@ -238,8 +288,7 @@ class DashboardService:
         conn = self._get_conn()
         if not conn:
             return {}
-        start, end = self._range(days)
-        return HeatmapAnalyzer(conn).analyze(start, end)
+        return self._cached(f"heatmap:{days}", lambda: HeatmapAnalyzer(conn).analyze(*self._range(days)))
 
     def defect_trend(self, days: int = 30) -> dict:
         conn = self._get_conn()
@@ -278,10 +327,24 @@ class DashboardService:
             return []
         return ProductAnalyzer(conn).product_ranking(start, end, top_n)
 
+    def _parse_custom_datetime(self, value: str, is_end: bool = False) -> datetime:
+        value = (value or "").strip()
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                return datetime.strptime(value, fmt)
+            except ValueError:
+                pass
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+        if is_end:
+            return parsed.replace(hour=23, minute=59, second=59)
+        return parsed
+
     def _range_custom(self, start_date: str, end_date: str) -> tuple[datetime, datetime]:
-        """获取自定义日期范围"""
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+        """获取自定义日期/时间范围"""
+        start = self._parse_custom_datetime(start_date)
+        end = self._parse_custom_datetime(end_date, is_end=True)
+        if end < start:
+            start, end = end, start
         return start, end
 
     def kpi_trend_custom_date(self, start_date: str, end_date: str) -> dict:
@@ -325,6 +388,22 @@ class DashboardService:
         start, end = self._range_custom(start_date, end_date)
         return DefectAnalyzer(conn).defect_distribution(start, end, top_n)
 
+    def top_defects_custom_date(self, start_date: str, end_date: str, top_n: int = 10) -> List[dict]:
+        """获取TOP缺陷（自定义日期/时间范围）"""
+        conn = self._get_conn()
+        if not conn:
+            return []
+        start, end = self._range_custom(start_date, end_date)
+        return DefectAnalyzer(conn).top_defects(start, end, top_n)
+
+    def station_ng_rates_custom_date(self, start_date: str, end_date: str) -> List[dict]:
+        """获取工站NG率（自定义日期/时间范围）"""
+        conn = self._get_conn()
+        if not conn:
+            return []
+        start, end = self._range_custom(start_date, end_date)
+        return StationAnalyzer(conn).station_ng_rates(start, end)
+
     def recent_records_custom_date(self, limit: int = 20, result_filter: str = "ng", start_date: str = None, end_date: str = None) -> List[dict]:
         """获取最近检测记录（自定义日期范围）"""
         conn = self._get_conn()
@@ -332,3 +411,11 @@ class DashboardService:
             return []
         start, end = self._range_custom(start_date, end_date)
         return DefectAnalyzer(conn).recent_records(start, end, limit, result_filter)
+
+    def heatmap_custom_date(self, start_date: str, end_date: str) -> Dict[str, int]:
+        """获取热力图数据（自定义日期/时间范围）"""
+        conn = self._get_conn()
+        if not conn:
+            return {}
+        start, end = self._range_custom(start_date, end_date)
+        return HeatmapAnalyzer(conn).analyze(start, end)

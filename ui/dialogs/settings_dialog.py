@@ -769,7 +769,7 @@ class SettingsWindow(QDialog):
                 fp_item.setForeground(QColor("#10B981") if has_fp else QColor("#EF4444"))
                 self.user_table.setItem(i, 3, fp_item)
 
-                has_pwd = bool(u.get("password", ""))
+                has_pwd = UserManager.password_is_set(u)
                 self.user_table.setItem(i, 4, QTableWidgetItem("已设置" if has_pwd else "未设置"))
 
                 can_review = u.get("can_review", u.get("role") != ROLE_OPERATOR)

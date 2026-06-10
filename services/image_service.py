@@ -21,6 +21,25 @@ class ImageService:
             start = end - timedelta(days=days)
         return start, end
 
+    def _range_custom(self, start_date: str, end_date: str) -> tuple:
+        def parse(value: str, is_end: bool = False) -> datetime:
+            value = (value or "").strip()
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                try:
+                    return datetime.strptime(value, fmt)
+                except ValueError:
+                    pass
+            parsed = datetime.strptime(value, "%Y-%m-%d")
+            if is_end:
+                return parsed.replace(hour=23, minute=59, second=59)
+            return parsed
+
+        start = parse(start_date)
+        end = parse(end_date, is_end=True)
+        if end < start:
+            start, end = end, start
+        return start, end
+
     def get_by_defect(self, defect_name: str, days: int = 0, limit: int = 20) -> List[dict]:
         conn = self._get_conn()
         if not conn:
@@ -41,8 +60,7 @@ class ImageService:
         conn = self._get_conn()
         if not conn:
             return []
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+        start, end = self._range_custom(start_date, end_date)
         analyzer = ImageAnalyzer(conn)
         return analyzer.query_by_filter("Defect", defect_name, start, end, limit)
 
@@ -50,8 +68,7 @@ class ImageService:
         conn = self._get_conn()
         if not conn:
             return []
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+        start, end = self._range_custom(start_date, end_date)
         analyzer = ImageAnalyzer(conn)
         return analyzer.query_by_filter("Area", area, start, end, limit)
 
@@ -59,7 +76,6 @@ class ImageService:
         conn = self._get_conn()
         if not conn:
             return []
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+        start, end = self._range_custom(start_date, end_date)
         analyzer = ImageAnalyzer(conn)
         return analyzer.query_by_filter("Defect", "", start, end, limit)

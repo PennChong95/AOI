@@ -26,5 +26,5 @@ class StationRepository:
     def find_details_batch(self, result_id: int) -> Tuple[List[StationDetail], List[InspectionDetailEntity]]:
         return self.conn.query_details_batch(result_id)
 
-    def update_review(self, sn: str, review_result: int, review_user: str, review_remark: str = ""):
-        self.conn.update_review(sn, review_result, review_user, review_remark)
+    def update_review(self, sn: str, review_result: int, review_user: str, review_remark: str = "") -> bool:
+        return self.conn.update_review(sn, review_result, review_user, review_remark)

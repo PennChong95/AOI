@@ -6,9 +6,9 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QComboBox,
     QFileDialog, QMessageBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QFrame, QWidget
+    QHeaderView, QFrame, QWidget, QDateTimeEdit
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QDateTime
 from PyQt5.QtGui import QColor
 from services.dashboard_service import DashboardService
 from ui.theme import Theme, get_primary_button_style
@@ -123,13 +123,45 @@ class ExportReportDialog(QDialog):
         days_row.addWidget(days_label)
         
         self._days_combo = QComboBox()
-        self._days_combo.addItems(["今天", "近7天", "近30天"])
+        self._days_combo.addItems(["今天", "近7天", "近30天", "自定义"])
         self._days_combo.setStyleSheet(self._get_combo_style())
-        self._days_combo.currentIndexChanged.connect(self._preview_data)
+        self._days_combo.currentIndexChanged.connect(self._on_range_mode_changed)
         days_row.addWidget(self._days_combo)
         days_row.addStretch()
         
         config_layout.addLayout(days_row)
+
+        custom_row = QHBoxLayout()
+        custom_row.setSpacing(12)
+
+        custom_label = QLabel("精确时间:")
+        custom_label.setStyleSheet(days_label.styleSheet())
+        custom_row.addWidget(custom_label)
+
+        self._start_dt = QDateTimeEdit()
+        self._start_dt.setCalendarPopup(True)
+        self._start_dt.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self._start_dt.setDateTime(QDateTime.currentDateTime().addDays(-7))
+        self._start_dt.setStyleSheet(self._get_datetime_style())
+        self._start_dt.dateTimeChanged.connect(self._on_custom_datetime_changed)
+        custom_row.addWidget(self._start_dt)
+
+        sep = QLabel("~")
+        sep.setStyleSheet(f"color: {Theme.get_color('text_muted')}; font-size: {Theme.get_font_size('md')}px;")
+        custom_row.addWidget(sep)
+
+        self._end_dt = QDateTimeEdit()
+        self._end_dt.setCalendarPopup(True)
+        self._end_dt.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self._end_dt.setDateTime(QDateTime.currentDateTime())
+        self._end_dt.setStyleSheet(self._get_datetime_style())
+        self._end_dt.dateTimeChanged.connect(self._on_custom_datetime_changed)
+        custom_row.addWidget(self._end_dt)
+        custom_row.addStretch()
+
+        self._custom_row_widgets = [custom_label, self._start_dt, sep, self._end_dt]
+        config_layout.addLayout(custom_row)
+        self._set_custom_range_visible(False)
         
         layout.addWidget(config_frame)
         
@@ -245,20 +277,82 @@ class ExportReportDialog(QDialog):
                 padding: 4px;
             }}
         """
+
+    def _get_datetime_style(self):
+        return f"""
+            QDateTimeEdit {{
+                padding: 8px 12px;
+                border: 1px solid {Theme.get_color('border')};
+                border-radius: {Theme.get_radius('md')}px;
+                background: {Theme.get_color('bg_card')};
+                color: {Theme.get_color('text_primary')};
+                font-size: {Theme.get_font_size('md')}px;
+                min-width: 170px;
+            }}
+            QDateTimeEdit:focus {{
+                border-color: {Theme.get_color('primary')};
+            }}
+        """
     
     def _get_days(self):
         """获取选中的天数"""
-        return [0, 7, 30][self._days_combo.currentIndex()]
+        return [0, 7, 30, -1][self._days_combo.currentIndex()]
+
+    def _is_custom_range(self) -> bool:
+        return self._get_days() == -1
+
+    def _get_custom_range(self) -> tuple[str, str]:
+        if self._end_dt.dateTime() < self._start_dt.dateTime():
+            self._end_dt.setDateTime(self._start_dt.dateTime())
+        start = self._start_dt.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+        end = self._end_dt.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+        return start, end
+
+    def _set_custom_range_visible(self, visible: bool):
+        for widget in self._custom_row_widgets:
+            widget.setVisible(visible)
+
+    def _on_range_mode_changed(self):
+        self._set_custom_range_visible(self._is_custom_range())
+        self._preview_data()
+
+    def _on_custom_datetime_changed(self):
+        if self._end_dt.dateTime() < self._start_dt.dateTime():
+            self._end_dt.blockSignals(True)
+            self._end_dt.setDateTime(self._start_dt.dateTime())
+            self._end_dt.blockSignals(False)
+        if self._is_custom_range():
+            self._preview_data()
+
+    def _get_report_data(self, rtype: str):
+        days = self._get_days()
+        if self._is_custom_range():
+            start, end = self._get_custom_range()
+            if rtype == "良率报表":
+                return self.service.yield_trend_custom_date(start, end, "day")
+            if rtype == "缺陷报表":
+                return self.service.top_defects_custom_date(start, end, 20)
+            if rtype == "工站报表":
+                return self.service.station_ng_rates_custom_date(start, end)
+            return []
+
+        if rtype == "良率报表":
+            return self.service.yield_trend(days, "day")
+        if rtype == "缺陷报表":
+            return self.service.top_defects(days, 20)
+        if rtype == "工站报表":
+            return self.service.station_ng_rates(days)
+        return []
     
     def _preview_data(self):
         """预览数据"""
         try:
-            days = self._get_days()
             rtype = self._report_type.currentText()
             
             if rtype == "良率报表":
-                data = self.service.yield_trend(days, "day")
+                data = self._get_report_data(rtype)
                 if not data:
+                    self._preview.setRowCount(0)
                     return
                 self._preview.setColumnCount(5)
                 self._preview.setHorizontalHeaderLabels(["日期", "检测数", "OK数", "NG数", "良率"])
@@ -280,8 +374,9 @@ class ExportReportDialog(QDialog):
                     self._preview.setItem(i, 4, rate_item)
                     
             elif rtype == "缺陷报表":
-                data = self.service.top_defects(days, 20)
+                data = self._get_report_data(rtype)
                 if not data:
+                    self._preview.setRowCount(0)
                     return
                 self._preview.setColumnCount(3)
                 self._preview.setHorizontalHeaderLabels(["缺陷名称", "数量", "占比"])
@@ -292,8 +387,9 @@ class ExportReportDialog(QDialog):
                     self._preview.setItem(i, 2, QTableWidgetItem(f"{d['pct']:.1f}%"))
                     
             elif rtype == "工站报表":
-                data = self.service.station_ng_rates(days)
+                data = self._get_report_data(rtype)
                 if not data:
+                    self._preview.setRowCount(0)
                     return
                 self._preview.setColumnCount(4)
                 self._preview.setHorizontalHeaderLabels(["工站名称", "检测数", "NG数", "NG率"])
@@ -328,24 +424,23 @@ class ExportReportDialog(QDialog):
             if not path:
                 return
             
-            days = self._get_days()
             rtype = self._report_type.currentText()
             
             headers = []
             rows = []
             
             if rtype == "良率报表":
-                data = self.service.yield_trend(days, "day")
+                data = self._get_report_data(rtype)
                 headers = ["日期", "检测数", "OK数", "NG数", "良率"]
                 rows = [[d["period"], d["total"], d["ok"], d["ng"], f"{d['yield_rate']:.1f}%"] for d in data]
                 
             elif rtype == "缺陷报表":
-                data = self.service.top_defects(days, 20)
+                data = self._get_report_data(rtype)
                 headers = ["缺陷名称", "数量", "占比"]
                 rows = [[d["name"], d["count"], f"{d['pct']:.1f}%"] for d in data]
                 
             elif rtype == "工站报表":
-                data = self.service.station_ng_rates(days)
+                data = self._get_report_data(rtype)
                 headers = ["工站名称", "检测数", "NG数", "NG率"]
                 rows = [[d["name"], d["total"], d["ng"], f"{d['ng_rate']:.1f}%"] for d in data]
             

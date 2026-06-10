@@ -1,9 +1,13 @@
 import json
+import logging
 from datetime import datetime
 from typing import List, Optional, Dict
 from collections import Counter
 from database.manager import DBConnection
 from analytics.cache import cached
+
+
+logger = logging.getLogger(__name__)
 
 
 class DefectAnalyzer:
@@ -40,7 +44,7 @@ class DefectAnalyzer:
         except (json.JSONDecodeError, TypeError):
             return
         if isinstance(data, dict):
-            datas = data.get("Datas") or data.get("defectDatas") or []
+            datas = data.get("Datas") or data.get("DefectDatas") or data.get("defectDatas") or []
             for d in datas if isinstance(datas, list) else []:
                 name = d.get("DefectName") or d.get("defectName") or ""
                 if name:
@@ -48,7 +52,7 @@ class DefectAnalyzer:
         elif isinstance(data, list):
             for item in data:
                 if isinstance(item, dict):
-                    datas = item.get("Datas") or item.get("defectDatas") or []
+                    datas = item.get("Datas") or item.get("DefectDatas") or item.get("defectDatas") or []
                     for d in datas if isinstance(datas, list) else []:
                         name = d.get("DefectName") or d.get("defectName") or ""
                         if name:
@@ -105,7 +109,7 @@ class DefectAnalyzer:
                         try:
                             data = json.loads(json_str) if isinstance(json_str, str) else json_str
                             if isinstance(data, dict):
-                                datas = data.get("Datas") or data.get("defectDatas") or []
+                                datas = data.get("Datas") or data.get("DefectDatas") or data.get("defectDatas") or []
                                 for d in datas if isinstance(datas, list) else []:
                                     name = d.get("DefectName") or d.get("defectName") or ""
                                     if name and name not in defect_names:
@@ -113,13 +117,13 @@ class DefectAnalyzer:
                             elif isinstance(data, list):
                                 for item in data:
                                     if isinstance(item, dict):
-                                        datas = item.get("Datas") or item.get("defectDatas") or []
+                                        datas = item.get("Datas") or item.get("DefectDatas") or item.get("defectDatas") or []
                                         for d in datas if isinstance(datas, list) else []:
                                             name = d.get("DefectName") or d.get("defectName") or ""
                                             if name and name not in defect_names:
                                                 defect_names.append(name)
-                        except (json.JSONDecodeError, TypeError):
-                            pass
+                        except (json.JSONDecodeError, TypeError) as exc:
+                            logger.debug("recent record defect json parse failed: error=%s", exc)
                 
                 result_val = row.get("Result", 0)
                 records.append({
@@ -145,5 +149,6 @@ class DefectAnalyzer:
             with self.conn.connection.cursor() as cursor:
                 cursor.execute(sql, params)
                 return cursor.fetchall()
-        except Exception:
+        except Exception as exc:
+            logger.warning("defect query failed: error=%s", exc)
             return []
